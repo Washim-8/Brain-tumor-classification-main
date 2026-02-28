@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="description" content="BrainScan AI — AI-powered brain tumor detection system using deep learning and MRI analysis for early diagnosis.">
+    <title>BrainScan AI | Brain Tumor Detection System</title>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- jQuery (kept for AJAX prediction) -->
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+
+    <!-- Custom CSS -->
+    <link href="{{ url_for('static', filename='css/brainscan.css') }}" rel="stylesheet">
+</head>
+
+<body>
+
+    <!-- ===== NAVBAR ===== -->
+    <nav class="navbar" id="navbar">
+        <div class="navbar-inner">
+            <div class="logo">
+                <span class="logo-icon">🧠</span>
+                <span class="logo-text">BrainScan <span class="logo-accent">AI</span></span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="nav-link">Home</a>
+                <a href="/about" class="nav-link">About</a>
+                <a href="/about#contact" class="nav-link">Contact</a>
+                <span class="nav-badge">Beta</span>
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}
+    {% endblock %}
+
+    <!-- ===== FOOTER ===== -->
+    <footer class="footer">
+        <div class="footer-inner">
+            <div class="footer-logo">🧠 BrainScan AI</div>
+            <p class="footer-copy">© 2026 Brain Tumor Detection System</p>
+            <p class="footer-sub">Built with AI &amp; Deep Learning · For Research &amp; Diagnostic Assistance</p>
+            <div class="footer-disclaimer">⚕️ This tool is intended for medical assistance only. Always consult a licensed physician.</div>
+        </div>
+    </footer>
+
+    <!-- Custom JS -->
+    <script src="{{ url_for('static', filename='js/brainscan.js') }}"></script>
+
+</body>
+
+</html>
