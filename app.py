@@ -1,5 +1,4 @@
 import os
-import threading
 import numpy as np
 from PIL import Image
 import cv2
@@ -11,49 +10,32 @@ app = Flask(__name__)
 # Ensure uploads directory exists (needed on ephemeral filesystems like Render)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
 
-# ── Model loading ─────────────────────────────────────────────────────────────
-# Use tf.keras exclusively to avoid conflicts with the standalone keras 3.x
-# package that pip may install alongside tensorflow 2.17.
+# ── Model loading (synchronous — runs at startup before gunicorn forks) ───────
+# gunicorn is started with --preload so this block executes once in the master
+# process and the loaded model is shared across all workers via fork().
+print("Loading TensorFlow...", flush=True)
+import tensorflow as tf
+print(f"TensorFlow {tf.__version__} loaded.", flush=True)
+
+_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'BrainTumor10Epochs.h5')
+print(f"Loading model from {_MODEL_PATH} ...", flush=True)
+
 model = None
 model_ready = False
 model_error = None
-model_load_log = []   # collects step-by-step progress for /debug
 
-def _log(msg):
-    print(msg, flush=True)
-    model_load_log.append(msg)
-
-def _load_model():
-    global model, model_ready, model_error
-    try:
-        _log("Step 1: importing tensorflow...")
-        import tensorflow as tf
-        _log(f"Step 2: TF version = {tf.__version__}")
-
-        model_path = os.path.join(os.path.dirname(__file__), 'BrainTumor10Epochs.h5')
-        _log(f"Step 3: model path = {model_path}")
-        _log(f"Step 4: file exists = {os.path.exists(model_path)}")
-
-        # Force tf.keras — avoids Keras 3 incompatibility with .h5 files
-        _log("Step 5: loading model with tf.keras.models.load_model ...")
-        model = tf.keras.models.load_model(model_path)
-        _log("Step 6: model loaded OK")
-
-        # Warm-up pass
-        dummy = np.zeros((1, 64, 64, 3), dtype=np.float32)
-        model.predict(dummy, verbose=0)
-        _log("Step 7: warm-up prediction done")
-
-        model_ready = True
-        _log("Step 8: model_ready = True")
-
-    except Exception as exc:
-        import traceback
-        model_error = str(exc)
-        _log(f"ERROR: {exc}")
-        _log(traceback.format_exc())
-
-threading.Thread(target=_load_model, daemon=True).start()
+try:
+    model = tf.keras.models.load_model(_MODEL_PATH)
+    # Warm-up: one dummy pass so the first real request is instant
+    _dummy = np.zeros((1, 64, 64, 3), dtype=np.float32)
+    model.predict(_dummy, verbose=0)
+    model_ready = True
+    print("Model loaded and warmed up. Ready.", flush=True)
+except Exception as _exc:
+    import traceback
+    model_error = str(_exc)
+    print(f"Model load ERROR: {_exc}", flush=True)
+    traceback.print_exc()
 
 
 # ── Brain MRI Validation ────────────────────────────────────────────────────
@@ -250,11 +232,15 @@ def status():
 
 @app.route('/debug', methods=['GET'])
 def debug():
-    """Shows the model load log — useful for diagnosing Render failures."""
+    """Shows model status — useful for diagnosing Render failures."""
+    import sys
     return jsonify({
         'ready': model_ready,
         'error': model_error,
-        'log': model_load_log
+        'tf_version': tf.__version__,
+        'python_version': sys.version,
+        'model_file_exists': os.path.exists(_MODEL_PATH),
+        'model_file_size_mb': round(os.path.getsize(_MODEL_PATH) / 1e6, 1) if os.path.exists(_MODEL_PATH) else None
     })
 
 
