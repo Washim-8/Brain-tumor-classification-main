@@ -33,6 +33,8 @@ $(document).ready(function () {
 
     /* ===== MODEL READY POLLING ===== */
     let modelReady = false;
+    let pollAttempts = 0;
+    const MAX_POLL_ATTEMPTS = 60; // 60 × 3s = 3 minutes max
 
     function lockUpload() {
         $uploadCard.addClass('upload-locked');
@@ -54,7 +56,6 @@ $(document).ready(function () {
                 '<span class="banner-icon">✅</span>' +
                 '<span class="banner-text"><strong>Model ready.</strong> Upload a Brain MRI scan to begin analysis.</span>'
             );
-        // Auto-hide the ready banner after 4 s
         setTimeout(function () {
             $modelBanner.fadeOut(600, function () { $(this).remove(); });
         }, 4000);
@@ -67,11 +68,18 @@ $(document).ready(function () {
             .addClass('banner-error')
             .html(
                 '<span class="banner-icon">❌</span>' +
-                '<span class="banner-text"><strong>Model failed to load.</strong> ' + (msg || 'Please refresh the page.') + '</span>'
+                '<span class="banner-text"><strong>Model failed to load.</strong> ' +
+                (msg || 'Please refresh the page.') +
+                ' &nbsp;<a href="/debug" target="_blank" style="color:inherit;text-decoration:underline">View details</a></span>'
             );
     }
 
     function pollStatus() {
+        pollAttempts++;
+        if (pollAttempts > MAX_POLL_ATTEMPTS) {
+            showModelError('Timed out waiting for model. Try refreshing the page.');
+            return;
+        }
         $.getJSON('/status', function (data) {
             if (data.ready) {
                 modelReady = true;
@@ -79,7 +87,6 @@ $(document).ready(function () {
             } else if (data.error) {
                 showModelError(data.error);
             } else {
-                // Still loading — poll again in 3 s
                 setTimeout(pollStatus, 3000);
             }
         }).fail(function () {
@@ -87,7 +94,7 @@ $(document).ready(function () {
         });
     }
 
-    // Show loading banner immediately and start polling
+    // Show loading banner immediately and start polling after 2s
     $modelBanner
         .addClass('banner-loading')
         .html(
@@ -96,7 +103,7 @@ $(document).ready(function () {
         )
         .show();
     lockUpload();
-    pollStatus();
+    setTimeout(pollStatus, 2000);
 
     /* ===== IMAGE PREVIEW HELPER ===== */
     function readURL(input) {

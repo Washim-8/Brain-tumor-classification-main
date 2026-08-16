@@ -6,33 +6,52 @@ import cv2
 from flask import Flask, request, render_template, jsonify
 from werkzeug.utils import secure_filename
 
-
 app = Flask(__name__)
 
 # Ensure uploads directory exists (needed on ephemeral filesystems like Render)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
 
-# ── Async model loading ──────────────────────────────────────────────────────
-# TensorFlow import is deferred inside the thread so the Flask worker
-# is not blocked and can respond to /status while the model loads.
+# ── Model loading ─────────────────────────────────────────────────────────────
+# Use tf.keras exclusively to avoid conflicts with the standalone keras 3.x
+# package that pip may install alongside tensorflow 2.17.
 model = None
 model_ready = False
 model_error = None
+model_load_log = []   # collects step-by-step progress for /debug
+
+def _log(msg):
+    print(msg, flush=True)
+    model_load_log.append(msg)
 
 def _load_model():
     global model, model_ready, model_error
     try:
-        # Import here so startup isn't blocked on TF initialisation
-        from keras.models import load_model as _load
-        model = _load('BrainTumor10Epochs.h5')
-        # Warm up: run one dummy prediction so the first real request is fast
+        _log("Step 1: importing tensorflow...")
+        import tensorflow as tf
+        _log(f"Step 2: TF version = {tf.__version__}")
+
+        model_path = os.path.join(os.path.dirname(__file__), 'BrainTumor10Epochs.h5')
+        _log(f"Step 3: model path = {model_path}")
+        _log(f"Step 4: file exists = {os.path.exists(model_path)}")
+
+        # Force tf.keras — avoids Keras 3 incompatibility with .h5 files
+        _log("Step 5: loading model with tf.keras.models.load_model ...")
+        model = tf.keras.models.load_model(model_path)
+        _log("Step 6: model loaded OK")
+
+        # Warm-up pass
         dummy = np.zeros((1, 64, 64, 3), dtype=np.float32)
         model.predict(dummy, verbose=0)
+        _log("Step 7: warm-up prediction done")
+
         model_ready = True
-        print('Model loaded and warmed up.')
+        _log("Step 8: model_ready = True")
+
     except Exception as exc:
+        import traceback
         model_error = str(exc)
-        print(f'Model load failed: {exc}')
+        _log(f"ERROR: {exc}")
+        _log(traceback.format_exc())
 
 threading.Thread(target=_load_model, daemon=True).start()
 
@@ -198,13 +217,14 @@ def get_className(classNo):
 
 
 def getResult(img_path):
+    import tensorflow as tf  # already imported in thread; cached by Python
     image = cv2.imread(img_path)
     image = Image.fromarray(image, 'RGB')
     image = image.resize((64, 64))
-    image = np.array(image)
+    image = np.array(image, dtype=np.float32)
     input_img = np.expand_dims(image, axis=0)
     predictions = model.predict(input_img, verbose=0)
-    # predictions[0] is a 1-element array like [0.87]; round to 0 or 1
+    # predictions[0] is shape (1,) for sigmoid output → scalar float
     score = float(predictions[0][0])
     return int(round(score))
 
@@ -225,6 +245,16 @@ def status():
     return jsonify({
         'ready': model_ready,
         'error': model_error
+    })
+
+
+@app.route('/debug', methods=['GET'])
+def debug():
+    """Shows the model load log — useful for diagnosing Render failures."""
+    return jsonify({
+        'ready': model_ready,
+        'error': model_error,
+        'log': model_load_log
     })
 
 
