@@ -11,6 +11,8 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
+# Ensure uploads directory exists (needed on ephemeral filesystems like Render)
+os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
 
 model =load_model('BrainTumor10Epochs.h5')
 print('Model loaded. Check http://127.0.0.1:5000/')
@@ -225,4 +227,5 @@ def upload():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

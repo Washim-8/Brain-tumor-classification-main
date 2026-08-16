@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Environment variables
+.env
+*.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads (user-uploaded files — do NOT commit)
+uploads/*
+!uploads/.gitkeep
+
+# Datasets (large training data — do NOT commit)
+datasets/
+
+# NOTE: BrainTumor10Epochs.h5 IS intentionally committed
+# so Render can load the model at startup.
