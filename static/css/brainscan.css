@@ -940,3 +940,70 @@ body {
         display: none;
     }
 }
+
+/* ===== MODEL STATUS BANNER ===== */
+.model-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    border-radius: 12px;
+    font-size: 0.92rem;
+    font-weight: 500;
+    margin-bottom: 20px;
+    transition: all 0.3s ease;
+}
+
+.model-banner.banner-loading {
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    color: #1E40AF;
+}
+
+.model-banner.banner-ready {
+    background: #F0FDF4;
+    border: 1px solid #BBF7D0;
+    color: #166534;
+}
+
+.model-banner.banner-error {
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    color: #991B1B;
+}
+
+.banner-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.banner-text strong {
+    font-weight: 700;
+}
+
+/* Spinner inside the banner */
+.banner-spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2.5px solid #BFDBFE;
+    border-top-color: #2563EB;
+    border-radius: 50%;
+    animation: bannerSpin 0.8s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes bannerSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ===== UPLOAD LOCKED STATE ===== */
+.upload-locked .drop-zone {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.upload-locked .drop-zone .drop-title,
+.upload-locked .drop-zone .drop-sub {
+    color: #9CA3AF;
+}

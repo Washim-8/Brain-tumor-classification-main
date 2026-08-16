@@ -1,8 +1,7 @@
 /**
  * BrainScan AI — Frontend Script
- * Handles: image preview, drag-and-drop, AJAX prediction,
- *          MRI validation warning, result rendering.
- * All existing jQuery AJAX routes (/predict) are preserved.
+ * Handles: model-ready polling, image preview, drag-and-drop,
+ *          AJAX prediction, MRI validation warning, result rendering.
  */
 
 $(document).ready(function () {
@@ -12,13 +11,15 @@ $(document).ready(function () {
     const $predictBtn     = $('#btn-predict');
     const $resultCard     = $('#result');
     const $loaderCard     = $('#loaderCard');
-    const $warningCard    = $('#warningCard');      // amber warning card
+    const $warningCard    = $('#warningCard');
     const $dropZone       = $('#dropZone');
     const $changeFileBtn  = $('#changeFile');
     const $resultBadge    = $('#resultBadge');
     const $confidenceWrap = $('#confidenceWrap');
     const $confidencePct  = $('#confidencePct');
     const $progressFill   = $('#progressFill');
+    const $modelBanner    = $('#modelBanner');
+    const $uploadCard     = $('#uploadCard');
 
     /* Sentinel prefix must match WARNING_PREFIX in app.py */
     const WARNING_PREFIX = '__WARNING__:';
@@ -29,6 +30,73 @@ $(document).ready(function () {
     $resultCard.hide();
     $loaderCard.hide();
     $warningCard.hide();
+
+    /* ===== MODEL READY POLLING ===== */
+    let modelReady = false;
+
+    function lockUpload() {
+        $uploadCard.addClass('upload-locked');
+        $dropZone.css('pointer-events', 'none');
+        $('#imageUpload').prop('disabled', true);
+    }
+
+    function unlockUpload() {
+        $uploadCard.removeClass('upload-locked');
+        $dropZone.css('pointer-events', '');
+        $('#imageUpload').prop('disabled', false);
+    }
+
+    function showModelReady() {
+        $modelBanner
+            .removeClass('banner-loading banner-error')
+            .addClass('banner-ready')
+            .html(
+                '<span class="banner-icon">✅</span>' +
+                '<span class="banner-text"><strong>Model ready.</strong> Upload a Brain MRI scan to begin analysis.</span>'
+            );
+        // Auto-hide the ready banner after 4 s
+        setTimeout(function () {
+            $modelBanner.fadeOut(600, function () { $(this).remove(); });
+        }, 4000);
+        unlockUpload();
+    }
+
+    function showModelError(msg) {
+        $modelBanner
+            .removeClass('banner-loading banner-ready')
+            .addClass('banner-error')
+            .html(
+                '<span class="banner-icon">❌</span>' +
+                '<span class="banner-text"><strong>Model failed to load.</strong> ' + (msg || 'Please refresh the page.') + '</span>'
+            );
+    }
+
+    function pollStatus() {
+        $.getJSON('/status', function (data) {
+            if (data.ready) {
+                modelReady = true;
+                showModelReady();
+            } else if (data.error) {
+                showModelError(data.error);
+            } else {
+                // Still loading — poll again in 3 s
+                setTimeout(pollStatus, 3000);
+            }
+        }).fail(function () {
+            setTimeout(pollStatus, 5000);
+        });
+    }
+
+    // Show loading banner immediately and start polling
+    $modelBanner
+        .addClass('banner-loading')
+        .html(
+            '<span class="banner-spinner"></span>' +
+            '<span class="banner-text"><strong>AI model is initialising…</strong> This takes about 30 seconds on first load. Please wait.</span>'
+        )
+        .show();
+    lockUpload();
+    pollStatus();
 
     /* ===== IMAGE PREVIEW HELPER ===== */
     function readURL(input) {
@@ -43,15 +111,14 @@ $(document).ready(function () {
 
     /* ===== FILE INPUT: CHANGE EVENT ===== */
     $('#imageUpload').change(function () {
+        if (!modelReady) return;
         $imageSection.show();
         $predictBtn.show().css('display', 'flex');
         $resultCard.hide();
-        $warningCard.hide();        // clear any previous warning
+        $warningCard.hide();
         $resultBadge.html('');
         $confidenceWrap.hide();
         readURL(this);
-
-        // Update drop zone visual
         $dropZone.addClass('has-file');
     });
 
@@ -61,7 +128,7 @@ $(document).ready(function () {
     if (dropZoneEl) {
         dropZoneEl.addEventListener('dragover', function (e) {
             e.preventDefault();
-            $(this).addClass('dragover');
+            if (modelReady) $(this).addClass('dragover');
         });
 
         dropZoneEl.addEventListener('dragleave', function () {
@@ -71,10 +138,10 @@ $(document).ready(function () {
         dropZoneEl.addEventListener('drop', function (e) {
             e.preventDefault();
             $(this).removeClass('dragover');
+            if (!modelReady) return;
             const files = e.dataTransfer.files;
             if (files && files.length > 0) {
                 const fileInput = document.getElementById('imageUpload');
-                // Create a DataTransfer to assign dropped file to the input
                 const dt = new DataTransfer();
                 dt.items.add(files[0]);
                 fileInput.files = dt.files;
@@ -128,22 +195,13 @@ $(document).ready(function () {
             '</div>';
 
         $warningCard.html(html).hide().fadeIn(400);
-
-        // Smooth scroll to warning card
-        $('html, body').animate({
-            scrollTop: $warningCard.offset().top - 100
-        }, 500);
-
-        // Retry button — trigger file picker
-        $('#warningRetry').on('click', function () {
-            $('#imageUpload').trigger('click');
-        });
+        $('html, body').animate({ scrollTop: $warningCard.offset().top - 100 }, 500);
+        $('#warningRetry').on('click', function () { $('#imageUpload').trigger('click'); });
     }
 
     /* ===== RESULT RENDERER ===== */
     function renderResult(data) {
-        const isNoTumor = data.toLowerCase().includes('no') ||
-                          data.toLowerCase().includes('no tumor');
+        const isNoTumor = data.toLowerCase().includes('no');
 
         const checkIcon =
             '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" ' +
@@ -163,40 +221,36 @@ $(document).ready(function () {
             '<line x1="12" y1="17" x2="12.01" y2="17"></line>' +
             '</svg>';
 
-        const icon        = isNoTumor ? checkIcon : warnIcon;
-        const badgeClass  = isNoTumor ? 'success'  : 'danger';
-        const label       = data.trim();
+        const icon       = isNoTumor ? checkIcon : warnIcon;
+        const badgeClass = isNoTumor ? 'success'  : 'danger';
 
         $resultBadge.html(
-            '<div class="result-badge ' + badgeClass + '">' + icon + label + '</div>'
+            '<div class="result-badge ' + badgeClass + '">' + icon + data.trim() + '</div>'
         );
 
-        // Generate a plausible confidence score for visual feedback
         const fakeConf = isNoTumor
-            ? Math.floor(Math.random() * 10 + 88)   // 88–97 %
-            : Math.floor(Math.random() * 12 + 82);  // 82–93 %
+            ? Math.floor(Math.random() * 10 + 88)
+            : Math.floor(Math.random() * 12 + 82);
 
         $confidencePct.text(fakeConf + '%');
         $progressFill.css('width', '0%');
         $confidenceWrap.show();
-
-        // Animate bar after a short delay for visual effect
-        setTimeout(function () {
-            $progressFill.css('width', fakeConf + '%');
-        }, 100);
+        setTimeout(function () { $progressFill.css('width', fakeConf + '%'); }, 100);
     }
 
     /* ===== PREDICT BUTTON: CLICK ===== */
     $predictBtn.on('click', function () {
-        var formData = new FormData($('#upload-file')[0]);
+        if (!modelReady) {
+            alert('The AI model is still loading. Please wait a moment.');
+            return;
+        }
 
-        // Show loader, hide other cards
+        var formData = new FormData($('#upload-file')[0]);
         $predictBtn.hide();
         $loaderCard.show();
         $resultCard.hide();
         $warningCard.hide();
 
-        // AJAX call to existing /predict route (route unchanged)
         $.ajax({
             type        : 'POST',
             url         : '/predict',
@@ -208,31 +262,31 @@ $(document).ready(function () {
             success: function (data) {
                 $loaderCard.hide();
 
-                // ── Check for MRI validation warning sentinel ──────────────
-                if (typeof data === 'string' && data.indexOf(WARNING_PREFIX) === 0) {
-                    var message = data.slice(WARNING_PREFIX.length);
-                    renderWarning(message);
+                if (typeof data === 'object' && data.error === 'model_loading') {
+                    $resultBadge.html(
+                        '<div class="result-badge danger">Model is still loading. Please wait and try again.</div>'
+                    );
+                    $resultCard.show();
                     $predictBtn.show();
                     return;
                 }
 
-                // ── Normal prediction result ───────────────────────────────
+                if (typeof data === 'string' && data.indexOf(WARNING_PREFIX) === 0) {
+                    renderWarning(data.slice(WARNING_PREFIX.length));
+                    $predictBtn.show();
+                    return;
+                }
+
                 $warningCard.hide();
                 renderResult(data);
-
-                // Show result card with animation
                 $resultCard.hide().fadeIn(500);
-
-                // Smooth scroll to result
-                $('html, body').animate({
-                    scrollTop: $resultCard.offset().top - 100
-                }, 600);
-
-                // Show predict button again for re-analysis
+                $('html, body').animate({ scrollTop: $resultCard.offset().top - 100 }, 600);
                 $predictBtn.show();
             },
-            error: function () {
+            error: function (xhr) {
                 $loaderCard.hide();
+                var msg = 'Analysis failed. Please try again.';
+                if (xhr.status === 503) msg = 'Model is still initialising. Please wait ~30 s and retry.';
                 $resultBadge.html(
                     '<div class="result-badge danger">' +
                         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
@@ -242,7 +296,7 @@ $(document).ready(function () {
                             '<line x1="12" y1="8" x2="12" y2="12"></line>' +
                             '<line x1="12" y1="16" x2="12.01" y2="16"></line>' +
                         '</svg>' +
-                        ' Analysis failed. Please try again.' +
+                        ' ' + msg +
                     '</div>'
                 );
                 $resultCard.show();
@@ -260,11 +314,10 @@ $(document).ready(function () {
         }
     });
 
-    /* ===== NAVBAR: ACTIVE STATE HANDLING ===== */
+    /* ===== NAVBAR: ACTIVE STATE ===== */
     const currentPath = window.location.pathname;
     $('.nav-link').removeClass('active');
-    
-    if (currentPath === '/' || currentPath === '/index' || currentPath === '') {
+    if (currentPath === '/' || currentPath === '') {
         $('.nav-link[href="/"]').addClass('active');
     } else if (currentPath.includes('/about')) {
         $('.nav-link[href="/about"]').addClass('active');

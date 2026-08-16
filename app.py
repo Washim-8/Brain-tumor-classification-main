@@ -1,11 +1,9 @@
 import os
-import tensorflow as tf
+import threading
 import numpy as np
-from keras.preprocessing import image
-from PIL import Image, ImageStat
+from PIL import Image
 import cv2
-from keras.models import load_model
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, jsonify
 from werkzeug.utils import secure_filename
 
 
@@ -14,8 +12,29 @@ app = Flask(__name__)
 # Ensure uploads directory exists (needed on ephemeral filesystems like Render)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
 
-model =load_model('BrainTumor10Epochs.h5')
-print('Model loaded. Check http://127.0.0.1:5000/')
+# ── Async model loading ──────────────────────────────────────────────────────
+# TensorFlow import is deferred inside the thread so the Flask worker
+# is not blocked and can respond to /status while the model loads.
+model = None
+model_ready = False
+model_error = None
+
+def _load_model():
+    global model, model_ready, model_error
+    try:
+        # Import here so startup isn't blocked on TF initialisation
+        from keras.models import load_model as _load
+        model = _load('BrainTumor10Epochs.h5')
+        # Warm up: run one dummy prediction so the first real request is fast
+        dummy = np.zeros((1, 64, 64, 3), dtype=np.float32)
+        model.predict(dummy, verbose=0)
+        model_ready = True
+        print('Model loaded and warmed up.')
+    except Exception as exc:
+        model_error = str(exc)
+        print(f'Model load failed: {exc}')
+
+threading.Thread(target=_load_model, daemon=True).start()
 
 
 # ── Brain MRI Validation ────────────────────────────────────────────────────
@@ -172,24 +191,22 @@ WARNING_PREFIX = "__WARNING__:"
 # ── Tumor Classification ─────────────────────────────────────────────────────
 
 def get_className(classNo):
-	if classNo==0:
-		return "No Brain Tumor"
-	elif classNo==1:
-		return "Yes, Brain Tumor Detected"
+    if classNo == 0:
+        return "No Brain Tumor"
+    else:
+        return "Yes, Brain Tumor Detected"
 
 
-def getResult(img):
-    image=cv2.imread(img)
+def getResult(img_path):
+    image = cv2.imread(img_path)
     image = Image.fromarray(image, 'RGB')
     image = image.resize((64, 64))
-    image=np.array(image)
+    image = np.array(image)
     input_img = np.expand_dims(image, axis=0)
-    #result=model.predict_classes(input_img)
-    #return result
-    predictions= model.predict(input_img)
-    return predictions[0]
-    #result= np.argmax(model.predict(input_img), axis= -1)
-    #return result
+    predictions = model.predict(input_img, verbose=0)
+    # predictions[0] is a 1-element array like [0.87]; round to 0 or 1
+    score = float(predictions[0][0])
+    return int(round(score))
 
 
 @app.route('/', methods=['GET'])
@@ -202,9 +219,21 @@ def about():
     return render_template('about_contact.html')
 
 
+@app.route('/status', methods=['GET'])
+def status():
+    """Polled by the frontend to know when the model is ready."""
+    return jsonify({
+        'ready': model_ready,
+        'error': model_error
+    })
+
+
 @app.route('/predict', methods=['GET', 'POST'])
 def upload():
     if request.method == 'POST':
+        if not model_ready:
+            return jsonify({'error': 'model_loading'}), 503
+
         f = request.files['file']
 
         basepath = os.path.dirname(__file__)
