@@ -1,4 +1,5 @@
 import os
+import threading
 import numpy as np
 from PIL import Image
 import cv2
@@ -10,32 +11,43 @@ app = Flask(__name__)
 # Ensure uploads directory exists (needed on ephemeral filesystems like Render)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
 
-# ── Model loading (synchronous — runs at startup before gunicorn forks) ───────
-# gunicorn is started with --preload so this block executes once in the master
-# process and the loaded model is shared across all workers via fork().
-print("Loading TensorFlow...", flush=True)
-import tensorflow as tf
-print(f"TensorFlow {tf.__version__} loaded.", flush=True)
+# ── Model loading ─────────────────────────────────────────────────────────────
+# We load TF + the model ONCE inside each gunicorn worker (no --preload).
+# A threading.Lock ensures only one thread loads it even if two requests
+# arrive simultaneously on the first hit.
+
+import tensorflow as tf   # import at module level — happens per-worker
 
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), 'BrainTumor10Epochs.h5')
-print(f"Loading model from {_MODEL_PATH} ...", flush=True)
+_model_lock = threading.Lock()
 
-model = None
+model       = None
 model_ready = False
 model_error = None
 
-try:
-    model = tf.keras.models.load_model(_MODEL_PATH)
-    # Warm-up: one dummy pass so the first real request is instant
-    _dummy = np.zeros((1, 64, 64, 3), dtype=np.float32)
-    model.predict(_dummy, verbose=0)
-    model_ready = True
-    print("Model loaded and warmed up. Ready.", flush=True)
-except Exception as _exc:
-    import traceback
-    model_error = str(_exc)
-    print(f"Model load ERROR: {_exc}", flush=True)
-    traceback.print_exc()
+
+def _ensure_model():
+    """Load the model on first use. Thread-safe."""
+    global model, model_ready, model_error
+    if model_ready:
+        return
+    with _model_lock:
+        if model_ready:          # double-checked inside lock
+            return
+        try:
+            print("Worker: loading model...", flush=True)
+            m = tf.keras.models.load_model(_MODEL_PATH)
+            # Warm-up so the first real request is fast
+            m.predict(np.zeros((1, 64, 64, 3), dtype=np.float32), verbose=0)
+            model       = m
+            model_ready = True
+            model_error = None
+            print("Worker: model ready.", flush=True)
+        except Exception as exc:
+            import traceback
+            model_error = str(exc)
+            traceback.print_exc()
+            print(f"Worker: model load FAILED — {exc}", flush=True)
 
 
 # ── Brain MRI Validation ────────────────────────────────────────────────────
@@ -199,14 +211,14 @@ def get_className(classNo):
 
 
 def getResult(img_path):
-    import tensorflow as tf  # already imported in thread; cached by Python
     image = cv2.imread(img_path)
+    if image is None:
+        raise ValueError(f"cv2.imread returned None for path: {img_path}")
     image = Image.fromarray(image, 'RGB')
     image = image.resize((64, 64))
     image = np.array(image, dtype=np.float32)
     input_img = np.expand_dims(image, axis=0)
     predictions = model.predict(input_img, verbose=0)
-    # predictions[0] is shape (1,) for sigmoid output → scalar float
     score = float(predictions[0][0])
     return int(round(score))
 
@@ -223,39 +235,41 @@ def about():
 
 @app.route('/status', methods=['GET'])
 def status():
-    """Polled by the frontend to know when the model is ready."""
-    return jsonify({
-        'ready': model_ready,
-        'error': model_error
-    })
+    _ensure_model()
+    return jsonify({'ready': model_ready, 'error': model_error})
 
 
 @app.route('/debug', methods=['GET'])
 def debug():
-    """Shows model status — useful for diagnosing Render failures."""
     import sys
+    _ensure_model()
     return jsonify({
-        'ready': model_ready,
-        'error': model_error,
-        'tf_version': tf.__version__,
-        'python_version': sys.version,
-        'model_file_exists': os.path.exists(_MODEL_PATH),
-        'model_file_size_mb': round(os.path.getsize(_MODEL_PATH) / 1e6, 1) if os.path.exists(_MODEL_PATH) else None
+        'ready':              model_ready,
+        'error':              model_error,
+        'tf_version':         tf.__version__,
+        'python_version':     sys.version,
+        'model_file_exists':  os.path.exists(_MODEL_PATH),
+        'model_file_size_mb': round(os.path.getsize(_MODEL_PATH) / 1e6, 1)
+                              if os.path.exists(_MODEL_PATH) else None,
     })
 
 
 @app.route('/predict', methods=['GET', 'POST'])
 def upload():
     if request.method == 'POST':
+        _ensure_model()
+
         if not model_ready:
             return jsonify({'error': 'model_loading'}), 503
 
-        f = request.files['file']
+        f = request.files.get('file')
+        if not f:
+            return 'No file uploaded.', 400
 
-        basepath = os.path.dirname(__file__)
-        file_path = os.path.join(
-            basepath, 'uploads', secure_filename(f.filename))
+        basepath  = os.path.dirname(__file__)
+        file_path = os.path.join(basepath, 'uploads', secure_filename(f.filename))
         f.save(file_path)
+
         # ── Brain MRI validation gate ──────────────────────────────────
         if not is_valid_brain_image(file_path):
             return (
@@ -264,10 +278,16 @@ def upload():
                   "(Tumor / No Tumor). Only brain MRI images are supported."
             )
 
-        # ── Tumor prediction (only reached if MRI validation passes) ───
-        value  = getResult(file_path)
-        result = get_className(value)
-        return result
+        # ── Tumor prediction ───────────────────────────────────────────
+        try:
+            value  = getResult(file_path)
+            result = get_className(value)
+            return result
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            return f'Prediction error: {exc}', 500
+
     return None
 
 
