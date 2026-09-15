@@ -2,8 +2,11 @@ services:
   - type: web
     name: brain-tumor-classification
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --timeout 120 --workers 1
+    healthCheckPath: /status
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+
