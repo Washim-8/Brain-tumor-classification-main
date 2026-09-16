@@ -6,3 +6,5 @@ flask==3.0.3
 werkzeug==3.0.3
 scikit-learn==1.5.2
 gunicorn==22.0.0
+flask-compress>=1.14
+

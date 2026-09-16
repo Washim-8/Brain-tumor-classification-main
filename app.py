@@ -1,15 +1,63 @@
 import os
 import threading
+import time
+import urllib.request
 import numpy as np
 from PIL import Image
 import cv2
-from flask import Flask, request, render_template, jsonify
+from flask import Flask, request, render_template, jsonify, make_response
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "brain-scan-secret-key-dev-only")
+app.config["COMPRESS_REGISTER"] = True
+app.config["COMPRESS_LEVEL"] = 6
+app.config["COMPRESS_MIN_SIZE"] = 500
+
+# Enable response compression if flask-compress is installed
+try:
+    from flask_compress import Compress
+    Compress(app)
+except ImportError:
+    pass
 
 # Ensure uploads directory exists (needed on ephemeral filesystems like Render)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'uploads'), exist_ok=True)
+
+
+# ── Keep-Alive Anti-Sleep Mechanism ───────────────────────────────────────────
+def _keep_alive():
+    """
+    Daemon thread that self-pings /health every 10 minutes.
+    Prevents Render free-tier from sleeping the service.
+    """
+    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not render_url:
+        return  # Not on Render — skip silently (local dev safety)
+
+    ping_url = f"{render_url}/health"
+    print(f"[KeepAlive] Self-ping enabled → {ping_url} every 10 min", flush=True)
+
+    # Wait 30s so Gunicorn fully starts before first ping
+    time.sleep(30)
+
+    while True:
+        try:
+            with urllib.request.urlopen(ping_url, timeout=10) as resp:
+                print(f"[KeepAlive] Pinged → HTTP {resp.status}", flush=True)
+        except Exception as exc:
+            print(f"[KeepAlive] Ping failed: {exc}", flush=True)
+        time.sleep(600)  # 10 minutes
+
+
+# Start thread at module import time
+_keep_alive_thread = threading.Thread(
+    target=_keep_alive,
+    name="keep-alive",
+    daemon=True
+)
+_keep_alive_thread.start()
+
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 # We load TF + the model ONCE inside each gunicorn worker (no --preload).
@@ -223,14 +271,38 @@ def getResult(img_path):
     return int(round(score))
 
 
+def add_cache_headers(response, seconds=3600):
+    """Add Cache-Control headers. Repeat visits load instantly from browser cache."""
+    response.cache_control.max_age = seconds
+    response.cache_control.public = True
+    return response
+
+
+@app.route('/health', methods=['GET'])
+@app.route('/healthz', methods=['GET'])
+def health():
+    """
+    Health check endpoint for Render.
+    RULES:
+      - Must return HTTP 200
+      - No authentication
+      - No database calls
+      - No ML model loading
+      - Must respond in < 2 seconds
+    """
+    return jsonify({"status": "healthy"}), 200
+
+
 @app.route('/', methods=['GET'])
 def index():
-    return render_template('index.html')
+    resp = make_response(render_template('index.html'))
+    return add_cache_headers(resp, seconds=300)
 
 
 @app.route('/about', methods=['GET'])
 def about():
-    return render_template('about_contact.html')
+    resp = make_response(render_template('about_contact.html'))
+    return add_cache_headers(resp, seconds=3600)
 
 
 @app.route('/status', methods=['GET'])
@@ -293,4 +365,5 @@ def upload():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    debug = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug)

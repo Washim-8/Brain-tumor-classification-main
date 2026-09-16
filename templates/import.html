@@ -8,11 +8,19 @@
     <meta name="description" content="BrainScan AI — AI-powered brain tumor detection system using deep learning and MRI analysis for early diagnosis.">
     <title>BrainScan AI | Brain Tumor Detection System</title>
 
-    <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Non-blocking Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link rel="preload" as="style"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@400;500;600;700&display=swap"
+      onload="this.onload=null;this.rel='stylesheet'"/>
+    <noscript>
+      <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Poppins:wght@400;500;600;700&display=swap"/>
+    </noscript>
 
-    <!-- jQuery (kept for AJAX prediction) -->
-    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+    <!-- jQuery (deferred) -->
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}" defer></script>
 
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/brainscan.css') }}" rel="stylesheet">
@@ -49,8 +57,8 @@
         </div>
     </footer>
 
-    <!-- Custom JS -->
-    <script src="{{ url_for('static', filename='js/brainscan.js') }}"></script>
+    <!-- Custom JS (deferred) -->
+    <script src="{{ url_for('static', filename='js/brainscan.js') }}" defer></script>
 
 </body>
 
